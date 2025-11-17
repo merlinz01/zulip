@@ -15,9 +15,6 @@ IGNORED_EVENTS = [
     "DOWNLOAD_CHART",
     "DELETE_CHART",
     "UPLOAD_CHART",
-    "PULL_ARTIFACT",
-    "DELETE_ARTIFACT",
-    "SCANNING_FAILED",
 ]
 
 
@@ -51,6 +48,18 @@ def handle_push_image_event(
     return f"{operator_username} pushed image `{image_id(payload)}`"
 
 
+def handle_pull_image_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    return f"{operator_username} pulled image `{image_id(payload)}`"
+
+
+def handle_delete_image_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    return f"{operator_username} deleted image `{image_id(payload)}`"
+
+
 SCANNING_COMPLETED_TEMPLATE = """
 Image scan completed for `{image_id}`. Vulnerabilities by severity:
 
@@ -80,9 +89,80 @@ def handle_scanning_completed_event(
     )
 
 
+def handle_scanning_stopped_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    return f"Image scan stopped for `{image_id(payload)}`"
+
+
+def handle_scanning_failed_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    return f"Image scan failed for `{image_id(payload)}`"
+
+
+def handle_quota_exceed_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    repo_name = payload["event_data"]["repository"]["repo_full_name"].tame(check_string)
+    details = (
+        payload["event_data"]["custom_attributes"]
+        .get("Details", WildValue("", payload.value))
+        .tame(check_string)
+    )
+    if details:
+        return f"Quota exceeded for repository `{repo_name}`: {details}"
+    return f"Quota exceeded for repository `{repo_name}`"
+
+
+def handle_quota_warning_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    repo_name = payload["event_data"]["repository"]["repo_full_name"].tame(check_string)
+    details = (
+        payload["event_data"]["custom_attributes"]
+        .get("Details", WildValue("", payload.value))
+        .tame(check_string)
+    )
+    if details:
+        return f"Quota warning for repository `{repo_name}`: {details}"
+    return f"Quota warning for repository `{repo_name}`"
+
+
+def handle_replication_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    replication = payload["event_data"]["replication"]
+    status = replication["status"].tame(check_string)
+    dest_resource = replication.get("dest_resource", WildValue("", payload.value))
+    if "endpoint" in dest_resource:
+        dest_endpoint = dest_resource["endpoint"].tame(check_string)
+        return f"Replication to `{dest_endpoint}` {status}"
+    return f"Replication {status}"
+
+
+def handle_tag_retention_event(
+    payload: WildValue, user_profile: UserProfile, operator_username: str
+) -> str:
+    retention = payload["event_data"]["retention"]
+    total = retention["total"].tame(check_int)
+    retained = retention["retained"].tame(check_int)
+    deleted = total - retained
+    repo_name = payload["event_data"]["repository"]["repo_full_name"].tame(check_string)
+    return f"Tag retention completed for `{repo_name}`: {retained} retained, {deleted} deleted (total: {total})"
+
+
 EVENT_FUNCTION_MAPPER = {
     "PUSH_ARTIFACT": handle_push_image_event,
+    "PULL_ARTIFACT": handle_pull_image_event,
+    "DELETE_ARTIFACT": handle_delete_image_event,
     "SCANNING_COMPLETED": handle_scanning_completed_event,
+    "SCANNING_STOPPED": handle_scanning_stopped_event,
+    "SCANNING_FAILED": handle_scanning_failed_event,
+    "QUOTA_EXCEED": handle_quota_exceed_event,
+    "QUOTA_WARNING": handle_quota_warning_event,
+    "REPLICATION": handle_replication_event,
+    "TAG_RETENTION": handle_tag_retention_event,
 }
 
 ALL_EVENT_TYPES = list(EVENT_FUNCTION_MAPPER.keys())
@@ -100,9 +180,8 @@ def api_harbor_webhook(
 
     if operator_username != "auto":
         operator_profile = guess_zulip_user_from_harbor(operator_username, user_profile.realm)
-
-    if operator_profile:
-        operator_username = f"@**{operator_profile.full_name}**"  # nocoverage
+        if operator_profile:
+            operator_username = f"@**{operator_profile.full_name}**"  # nocoverage
 
     event = payload["type"].tame(check_string)
     topic_name = payload["event_data"]["repository"]["repo_full_name"].tame(check_string)
